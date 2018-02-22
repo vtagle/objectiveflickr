@@ -28,6 +28,27 @@
 #import "ObjectiveFlickr.h"
 #import "OFUtilities.h"
 #import "OFXMLMapper.h"
+#import <objc/runtime.h>
+
+@interface NSURLSessionTask (OFFlickrSessionInfo)
+
+@property (nonatomic, strong) id sessionInfo;
+
+@end
+
+@implementation NSURLSessionTask (OFFlickrSessionInfo)
+
+- (void)setSessionInfo: (id)sessionInfo
+{
+    objc_setAssociatedObject(self, @selector(sessionInfo), sessionInfo, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+
+- (id)sessionInfo
+{
+    return objc_getAssociatedObject(self, @selector(sessionInfo));
+}
+
+@end
 
 NSString *const OFFlickrSmallSquareSize = @"s";
 NSString *const OFFlickrLargeSquareSize = @"q";
@@ -383,15 +404,18 @@ static void AssertIsValidURLString(NSString *urlString)
 
 @interface OFFlickrAPIRequest (PrivateMethods)
 - (void)cleanUpTempFile;
+- (NSString *)LFHttpErrorFromNSError: (NSError *)error;
 @end            
 
 @implementation OFFlickrAPIRequest
 - (void)dealloc
 {
     [context release];
-    HTTPRequest.delegate = nil;
-    [HTTPRequest cancelWithoutDelegateMessage];
-    [HTTPRequest release];
+//    HTTPRequest.delegate = nil;
+//    [HTTPRequest cancelWithoutDelegateMessage];
+//    [HTTPRequest release];
+    [urlSession release];
+    [dataTask release];
     [sessionInfo release];
     
     [self cleanUpTempFile];
@@ -404,8 +428,10 @@ static void AssertIsValidURLString(NSString *urlString)
     if ((self = [super init])) {
         context = [inContext retain];
         
-        HTTPRequest = [[LFHTTPRequest alloc] init];
-        [HTTPRequest setDelegate:self];
+//        HTTPRequest = [[LFHTTPRequest alloc] init];
+//        [HTTPRequest setDelegate:self];
+        urlSession = [NSURLSession sessionWithConfiguration: [NSURLSessionConfiguration defaultSessionConfiguration]];
+        [urlSession retain];
     }
     
     return self;
@@ -440,53 +466,107 @@ static void AssertIsValidURLString(NSString *urlString)
 
 - (NSTimeInterval)requestTimeoutInterval
 {
-    return [HTTPRequest timeoutInterval];
+//    return [HTTPRequest timeoutInterval];
+    return urlSession.configuration.timeoutIntervalForRequest;
 }
 
 - (void)setRequestTimeoutInterval:(NSTimeInterval)inTimeInterval
 {
-    [HTTPRequest setTimeoutInterval:inTimeInterval];
+//    [HTTPRequest setTimeoutInterval:inTimeInterval];
+    urlSession.configuration.timeoutIntervalForRequest = inTimeInterval;
 }
 
 - (BOOL)isRunning
 {
-    return [HTTPRequest isRunning];
+//    return [HTTPRequest isRunning];
+    return dataTask ? dataTask.state == NSURLSessionTaskStateRunning : NO;
 }
 
 - (void)cancel
 {
-    [HTTPRequest cancelWithoutDelegateMessage];
+//    [HTTPRequest cancelWithoutDelegateMessage];
+    [dataTask cancel];
     [self cleanUpTempFile];
 }
 
 - (BOOL)fetchOAuthRequestTokenWithCallbackURL:(NSURL *)inCallbackURL
 {
-    if ([HTTPRequest isRunning]) {
+//    if ([HTTPRequest isRunning]) {
+    if ( self.isRunning ) {
         return NO;
     }
 
     NSDictionary *paramsDictionary = [NSDictionary dictionaryWithObjectsAndKeys:[inCallbackURL absoluteString], @"oauth_callback", nil];
     NSURL *requestURL = [context oauthURLFromBaseURL:[NSURL URLWithString:@"https://www.flickr.com/services/oauth/request_token"] method:LFHTTPRequestGETMethod arguments:paramsDictionary];
-    [HTTPRequest setSessionInfo:OFFetchOAuthRequestTokenSession];
-    [HTTPRequest setContentType:nil];
-    return [HTTPRequest performMethod:LFHTTPRequestGETMethod onURL:requestURL withData:nil];
+//    [HTTPRequest setSessionInfo:OFFetchOAuthRequestTokenSession];
+//    [HTTPRequest setContentType:nil];
+//    return [HTTPRequest performMethod:LFHTTPRequestGETMethod onURL:requestURL withData:nil];
+    
+    dataTask = [urlSession dataTaskWithURL: requestURL
+                         completionHandler: ^(NSData * _Nullable data, NSURLResponse * _Nullable response, NSError * _Nullable error) {
+                             dispatch_async(dispatch_get_main_queue(), ^{
+                                 [dataTask release];
+                                 dataTask = nil;
+                                 
+                                 if ( error == nil ) {
+                                     LFHTTPRequest* httpRequest = [[[LFHTTPRequest alloc] init] autorelease];
+                                     httpRequest.receivedData = data;
+                                     httpRequest.sessionInfo = OFFetchOAuthRequestTokenSession;
+                                     [self httpRequestDidComplete: httpRequest];
+                                 }
+                                 else {
+                                     [self httpRequest: nil
+                                      didFailWithError: [self LFHttpErrorFromNSError: error]];
+                                 }
+                             });
+                         }];
+    [dataTask resume];
+    [dataTask retain];
+    
+    return YES;
 }
 
 - (BOOL)fetchOAuthAccessTokenWithRequestToken:(NSString *)inRequestToken verifier:(NSString *)inVerifier
 {
-    if ([HTTPRequest isRunning]) {
+    //    if ([HTTPRequest isRunning]) {
+    if ( self.isRunning ) {
         return NO;
     }
+    
     NSDictionary *paramsDictionary = [NSDictionary dictionaryWithObjectsAndKeys:inRequestToken, @"oauth_token", inVerifier, @"oauth_verifier", nil];
     NSURL *requestURL = [context oauthURLFromBaseURL:[NSURL URLWithString:@"https://www.flickr.com/services/oauth/access_token"] method:LFHTTPRequestGETMethod arguments:paramsDictionary];
-    [HTTPRequest setSessionInfo:OFFetchOAuthAccessTokenSession];
-    [HTTPRequest setContentType:nil];
-    return [HTTPRequest performMethod:LFHTTPRequestGETMethod onURL:requestURL withData:nil];
+//    [HTTPRequest setSessionInfo:OFFetchOAuthAccessTokenSession];
+//    [HTTPRequest setContentType:nil];
+//    return [HTTPRequest performMethod:LFHTTPRequestGETMethod onURL:requestURL withData:nil];
+    
+    dataTask = [urlSession dataTaskWithURL: requestURL
+                         completionHandler: ^(NSData * _Nullable data, NSURLResponse * _Nullable response, NSError * _Nullable error) {
+                             dispatch_async(dispatch_get_main_queue(), ^{
+                                 [dataTask release];
+                                 dataTask = nil;
+                                 
+                                 if ( error == nil ) {
+                                     LFHTTPRequest* httpRequest = [[[LFHTTPRequest alloc] init] autorelease];
+                                     httpRequest.receivedData = data;
+                                     httpRequest.sessionInfo = OFFetchOAuthAccessTokenSession;
+                                     [self httpRequestDidComplete: httpRequest];
+                                 }
+                                 else {
+                                     [self httpRequest: nil
+                                      didFailWithError: [self LFHttpErrorFromNSError: error]];
+                                 }
+                             });
+                         }];
+    [dataTask resume];
+    [dataTask retain];
+    
+    return YES;
 }
 
 - (BOOL)callAPIMethodWithGET:(NSString *)inMethodName arguments:(NSDictionary *)inArguments
 {
-    if ([HTTPRequest isRunning]) {
+    //    if ([HTTPRequest isRunning]) {
+    if ( self.isRunning ) {
         return NO;
     }
     
@@ -505,12 +585,36 @@ static void AssertIsValidURLString(NSString *urlString)
     }
     
     if (requestURL) {
-        [HTTPRequest setContentType:nil];
-        return [HTTPRequest performMethod:LFHTTPRequestGETMethod onURL:requestURL withData:nil];        
+//        [HTTPRequest setContentType:nil];
+//        return [HTTPRequest performMethod:LFHTTPRequestGETMethod onURL:requestURL withData:nil];
+        
+        [dataTask release];
+        dataTask = [urlSession dataTaskWithURL: requestURL
+                             completionHandler: ^(NSData * _Nullable data, NSURLResponse * _Nullable response, NSError * _Nullable error) {
+                                 dispatch_async(dispatch_get_main_queue(), ^{
+                                     [dataTask release];
+                                     dataTask = nil;
+                                     
+                                     if ( error == nil ) {
+                                         LFHTTPRequest* httpRequest = [[[LFHTTPRequest alloc] init] autorelease];
+                                         httpRequest.receivedData = data;
+                                         [self httpRequestDidComplete: httpRequest];
+                                     }
+                                     else {
+                                         [self httpRequest: nil
+                                          didFailWithError: [self LFHttpErrorFromNSError: error]];
+                                     }
+                                 });
+                             }];
+        [dataTask resume];
+        [dataTask retain];
+        
+        return YES;
     }
     return NO;
 }
 
+/*
 static NSData *NSDataFromOAuthPreferredWebForm(NSDictionary *formDictionary)
 {
     NSMutableString *combinedDataString = [NSMutableString string];
@@ -531,10 +635,12 @@ static NSData *NSDataFromOAuthPreferredWebForm(NSDictionary *formDictionary)
     
     return [combinedDataString dataUsingEncoding:NSUTF8StringEncoding allowLossyConversion:NO];    
 }
+ */
 
 - (BOOL)callAPIMethodWithPOST:(NSString *)inMethodName arguments:(NSDictionary *)inArguments
 {
-    if ([HTTPRequest isRunning]) {
+    /*
+    if ( self.isRunning ) {
         return NO;
     }
     
@@ -557,10 +663,14 @@ static NSData *NSDataFromOAuthPreferredWebForm(NSDictionary *formDictionary)
     
 	[HTTPRequest setContentType:LFHTTPRequestWWWFormURLEncodedContentType];
 	return [HTTPRequest performMethod:LFHTTPRequestPOSTMethod onURL:[NSURL URLWithString:[context RESTAPIEndpoint]] withData:postData];
+     */
+    
+    return NO; 
 }
 
 - (BOOL)uploadImageStream:(NSInputStream *)inImageStream suggestedFilename:(NSString *)inFilename MIMEType:(NSString *)inType arguments:(NSDictionary *)inArguments
 {
+    /*
     if ([HTTPRequest isRunning]) {
         return NO;
     }
@@ -663,6 +773,9 @@ static NSData *NSDataFromOAuthPreferredWebForm(NSDictionary *formDictionary)
 	
     [HTTPRequest setContentType:contentType];
     return [HTTPRequest performMethod:LFHTTPRequestPOSTMethod onURL:[NSURL URLWithString:[context uploadEndpoint]] withInputStream:inputStream knownContentSize:fileSize];
+     */
+    
+    return NO;
 }
 
 #pragma mark LFHTTPRequest delegate methods
@@ -768,6 +881,7 @@ static NSData *NSDataFromOAuthPreferredWebForm(NSDictionary *formDictionary)
         [delegate flickrAPIRequest:self imageUploadSentBytes:bytesSent totalBytes:total];
     }
 }
+
 @end
 
 @implementation OFFlickrAPIRequest (PrivateMethods)
@@ -787,4 +901,20 @@ static NSData *NSDataFromOAuthPreferredWebForm(NSDictionary *formDictionary)
         uploadTempFilename = nil;
     }
 }
+
+- (NSString *)LFHttpErrorFromNSError: (NSError *)error {
+    NSString* LFHttpError = nil;
+    
+    if ( [error.domain isEqualToString: NSURLErrorDomain] ) {
+        if ( error.code == NSURLErrorNetworkConnectionLost ) {
+            LFHttpError = LFHTTPRequestConnectionError;
+        }
+        else if ( error.code == NSURLErrorTimedOut ) {
+            LFHttpError = LFHTTPRequestTimeoutError;
+        }
+    }
+    
+    return LFHttpError;
+}
+
 @end

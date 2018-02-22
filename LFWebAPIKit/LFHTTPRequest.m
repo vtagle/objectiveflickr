@@ -686,10 +686,10 @@ void LFHRReadStreamClientCallBack(CFReadStreamRef stream, CFStreamEventType even
     _contentType = [contentType copy];
     [tmp release];
 }
-- (NSData *)receivedData
-{
-    return [[_receivedData retain] autorelease];
-}
+//- (NSData *)receivedData
+//{
+//    return [[_receivedData retain] autorelease];
+//}
 
 - (NSString *)receivedContentType
 {

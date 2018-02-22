@@ -122,7 +122,9 @@ typedef id<OFFlickrAPIRequestDelegate> OFFlickrAPIRequestDelegateType;
 @interface OFFlickrAPIRequest : NSObject
 {
     OFFlickrAPIContext *context;
-    LFHTTPRequest *HTTPRequest;
+//    LFHTTPRequest *HTTPRequest;
+    NSURLSession *urlSession;
+    NSURLSessionDataTask* dataTask; 
     
     OFFlickrAPIRequestDelegateType delegate;
     id sessionInfo;
